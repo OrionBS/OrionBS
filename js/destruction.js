@@ -16,13 +16,13 @@
   var MATERIALS = {
     wood: {
       density: 0.004, friction: 0.85, frictionStatic: 1.1, restitution: 0.02,
-      hp: 50,
+      hp: 40,
       fill: '#c89b5a', edge: '#8a6537', grain: 'rgba(118,79,37,0.55)',
       dust: ['#d9bc8c', '#c3a06a', '#a98552'],
     },
     stone: {
       density: 0.008, friction: 0.9, frictionStatic: 1.2, restitution: 0.01,
-      hp: 125, // 2.5x wood
+      hp: 100, // 2.5x wood
       fill: '#9aa1a8', edge: '#5f666d', grain: null,
       dust: ['#b7bdc3', '#9aa1a8', '#7e858c'],
     },
@@ -31,10 +31,14 @@
   // Impact energy = 0.5 * reducedMass * (relative velocity along normal)^2.
   // Resting stacks produce energies well below BLOCK_DMG_MIN, so they never chip.
   var BLOCK_DMG_MIN = 8;        // energy below this never damages a block
-  var BLOCK_DMG_SCALE = 0.08;   // hp lost per unit of energy above the floor
-  var ENEMY_HP = 30;
+  var BLOCK_DMG_SCALE = 0.35;   // hp lost per unit of energy above the floor
+  // (tuned against the real slingshot: a full pull arrives with energy ~140,
+  //  so a direct hit fragments a wood block; resting contacts stay < 8)
+  var ENEMY_HP = 12;
   var ENEMY_DMG_MIN = 4;        // gentle touches stay below this
-  var ENEMY_DMG_SCALE = 0.25;   // direct bird hit (~300+ energy) is instant death
+  var ENEMY_DMG_SCALE = 0.6;    // any solid arrival (rolling bird, falling block) kills
+  // (fragile like classic physics-puzzle pigs: E~24 rolling hit ≈ instant death,
+  //  E<4 resting contact harmless)
   var ENEMY_R = 20;
   var IMPACT_EVENT_MIN = 60;    // emit 'impact' (screenshake) above this energy
   var DUST_MIN_ENERGY = 15;     // spawn contact dust above this energy
