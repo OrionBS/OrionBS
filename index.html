@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Slingshot Physics Prototype</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #0e1420; }
+  #game {
+    display: block;
+    margin: 0 auto;
+    touch-action: none;
+    cursor: default;
+  }
+</style>
+</head>
+<body>
+<canvas id="game" width="1280" height="720"></canvas>
+<script src="vendor/matter.min.js"></script>
+<script src="js/world.js"></script>
+<script src="js/slingshot.js"></script>
+<script src="js/destruction.js"></script>
+<script src="js/gameloop.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
