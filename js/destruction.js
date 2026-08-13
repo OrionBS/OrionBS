@@ -1,8 +1,9 @@
-// destruction.js — module Structure: builds the target structure, applies
-// impact damage, fragments dead blocks into debris + dust, and owns the enemy.
+// destruction.js — module Structure: builds the level's structure, applies
+// impact damage, fragments dead blocks into debris + dust, and owns the enemies.
 //
-// Public API: Structure.init(), Structure.reset(), Structure.enemyAlive()
-// Emits: 'enemy:killed' {enemy}, 'impact' {x, y, energy}
+// Public API: Structure.init(), Structure.reset(), Structure.enemyAlive(),
+//             Structure.loadLevel(i), Structure.levelIndex(), Structure.level()
+// Emits: 'enemy:killed' {enemy}, 'level:cleared' {}, 'impact' {x, y, energy}
 // Consumes: 'level:reset'
 (function () {
   'use strict';
@@ -54,23 +55,17 @@
   // Ground top is Game.GROUND_Y (640). Every block spawns exactly touching
   // its support (bottom edge == support top edge) so the stack settles by
   // less than a pixel and falls asleep.
-  var LAYOUT = [
-    // first story: two wood columns + wood beam
-    { mat: 'wood',  x: 900,  y: 580, w: 20,  h: 120 }, // left column  (520..640)
-    { mat: 'wood',  x: 1060, y: 580, w: 20,  h: 120 }, // right column (520..640)
-    { mat: 'wood',  x: 980,  y: 510, w: 200, h: 20  }, // beam         (500..520)
-    // second story: two stone cubes above the columns + wood roof plank
-    { mat: 'stone', x: 910,  y: 480, w: 40,  h: 40  }, // (460..500)
-    { mat: 'stone', x: 1050, y: 480, w: 40,  h: 40  }, // (460..500)
-    { mat: 'wood',  x: 980,  y: 452, w: 160, h: 16  }, // roof         (444..460)
-  ];
-  var ENEMY_SPAWN = { x: 980, y: 620 }; // sheltered inside the first story
+  // Layouts live in js/levels.js (window.LEVELS); this module builds whichever
+  // level is currently selected.
+  var levelIndex = 0;
+
+  function currentLevel() { return window.LEVELS[levelIndex]; }
 
   // ------------------------------------------------------------- state
   var blocks = [];       // {body, mat, def, hp, maxHp, cracksA, cracksB, dead}
   var debrisList = [];   // {body, mat, w, h, born, sleepMs, alpha, fading, dead}
-  var enemy = null;      // {body, hp, dead}
-  var enemyAliveFlag = false;
+  var enemies = [];      // [{body, hp, dead}]
+  var enemiesLeft = 0;
   var registry = {};     // body.id -> {kind, rec}
   var pendingKills = []; // records queued for removal (processed in updater)
   var particles = [];    // {x,y,vx,vy,g,life,max,size,color}
@@ -136,8 +131,9 @@
 
   // -------------------------------------------------------- build / reset
   function build() {
-    for (var i = 0; i < LAYOUT.length; i++) {
-      var d = LAYOUT[i];
+    var layout = currentLevel().blocks;
+    for (var i = 0; i < layout.length; i++) {
+      var d = layout[i];
       var m = MATERIALS[d.mat];
       var body = Bodies.rectangle(d.x, d.y, d.w, d.h, {
         label: 'block',
@@ -155,14 +151,18 @@
       registry[body.id] = { kind: 'block', rec: rec };
       Composite.add(Game.world, body);
     }
-    var eb = Bodies.circle(ENEMY_SPAWN.x, ENEMY_SPAWN.y, ENEMY_R, {
-      label: 'enemy',
-      density: 0.0035, friction: 0.8, frictionStatic: 1.0, restitution: 0.1,
-    });
-    enemy = { body: eb, hp: ENEMY_HP, dead: false };
-    registry[eb.id] = { kind: 'enemy', rec: enemy };
-    Composite.add(Game.world, eb);
-    enemyAliveFlag = true;
+    var spawns = currentLevel().enemies;
+    for (i = 0; i < spawns.length; i++) {
+      var eb = Bodies.circle(spawns[i].x, spawns[i].y, ENEMY_R, {
+        label: 'enemy',
+        density: 0.0035, friction: 0.8, frictionStatic: 1.0, restitution: 0.1,
+      });
+      var erec = { body: eb, hp: ENEMY_HP, dead: false };
+      enemies.push(erec);
+      registry[eb.id] = { kind: 'enemy', rec: erec };
+      Composite.add(Game.world, eb);
+    }
+    enemiesLeft = enemies.length;
     blinkT = 0;
   }
 
@@ -174,7 +174,10 @@
     for (i = 0; i < debrisList.length; i++) {
       if (!debrisList[i].dead) Composite.remove(Game.world, debrisList[i].body);
     }
-    if (enemy && !enemy.dead) Composite.remove(Game.world, enemy.body);
+    for (i = 0; i < enemies.length; i++) {
+      if (!enemies[i].dead) Composite.remove(Game.world, enemies[i].body);
+    }
+    enemies.length = 0;
     blocks.length = 0;
     debrisList.length = 0;
     particles.length = 0;
@@ -182,8 +185,7 @@
     floaters.length = 0;
     pendingKills.length = 0;
     registry = {};
-    enemy = null;
-    enemyAliveFlag = false;
+    enemiesLeft = 0;
   }
 
   // ------------------------------------------------------------- damage
@@ -323,15 +325,18 @@
   }
 
   function killEnemy(rec) {
+    if (rec.dead) return;
     var pos = { x: rec.body.position.x, y: rec.body.position.y };
+    rec.dead = true;
     Composite.remove(Game.world, rec.body);
     delete registry[rec.body.id];
-    enemyAliveFlag = false;
+    enemiesLeft--;
     spawnRingBurst(pos.x, pos.y);
     spawnDust(pos.x, pos.y, 8, ['#c5f26b', '#a5d92e', '#ffffff'], 2.2, 0.05);
     flashes.push({ x: pos.x, y: pos.y, life: 260, max: 260, rMax: 64 });
     floaters.push({ x: pos.x, y: pos.y - 26, vy: -0.85, life: 800, max: 800, text: '+' });
-    Game.events.emit('enemy:killed', { enemy: rec.body });
+    Game.events.emit('enemy:killed', { enemy: rec.body, remaining: enemiesLeft });
+    if (enemiesLeft === 0) Game.events.emit('level:cleared', {});
   }
 
   function breakDebris(rec) {
@@ -398,7 +403,7 @@
       if (f.life <= 0) floaters.splice(i, 1);
     }
 
-    if (enemyAliveFlag) blinkT = (blinkT + dtMs) % BLINK_PERIOD_MS;
+    if (enemiesLeft > 0) blinkT = (blinkT + dtMs) % BLINK_PERIOD_MS;
   }
 
   // ------------------------------------------------------------- render
@@ -452,8 +457,8 @@
     }
   }
 
-  function drawEnemy(ctx) {
-    var b = enemy.body;
+  function drawEnemy(ctx, rec) {
+    var b = rec.body;
     ctx.save();
     ctx.translate(b.position.x, b.position.y);
     ctx.rotate(b.angle);
@@ -539,7 +544,9 @@
       ctx.restore();
     }
 
-    if (enemyAliveFlag) drawEnemy(ctx);
+    for (i = 0; i < enemies.length; i++) {
+      if (!enemies[i].dead) drawEnemy(ctx, enemies[i]);
+    }
 
     // dust / burst particles
     for (i = 0; i < particles.length; i++) {
@@ -596,9 +603,21 @@
       teardown();
       build();
     },
+    // true while any enemy in the level is still standing
     enemyAlive: function () {
-      return enemyAliveFlag;
+      return enemiesLeft > 0;
     },
+    enemiesLeft: function () {
+      return enemiesLeft;
+    },
+    loadLevel: function (i) {
+      levelIndex = ((i % window.LEVELS.length) + window.LEVELS.length) % window.LEVELS.length;
+      teardown();
+      build();
+    },
+    levelIndex: function () { return levelIndex; },
+    level: function () { return currentLevel(); },
+    levelCount: function () { return window.LEVELS.length; },
     // debug/test introspection (not part of the gameplay contract)
     _debug: function () {
       return {
@@ -611,8 +630,16 @@
         }),
         debris: debrisList.length,
         particles: particles.length,
-        enemy: enemyAliveFlag
-          ? { x: enemy.body.position.x, y: enemy.body.position.y, hp: enemy.hp }
+        level: levelIndex,
+        enemies: enemies.filter(function (e) { return !e.dead; }).map(function (e) {
+          return { x: e.body.position.x, y: e.body.position.y, hp: e.hp };
+        }),
+        // back-compat: first living enemy
+        enemy: enemiesLeft > 0
+          ? (function () {
+              var e = enemies.filter(function (r) { return !r.dead; })[0];
+              return { x: e.body.position.x, y: e.body.position.y, hp: e.hp };
+            })()
           : null,
       };
     },

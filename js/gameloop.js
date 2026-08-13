@@ -5,14 +5,15 @@
 (function () {
   'use strict';
 
-  const TOTAL_BIRDS = 3;
+  const DEFAULT_BIRDS = 3;
   const RELOAD_BEAT_MS = 700;   // pause after a dead bird before nocking the next
   const WIN_REVEAL_MS = 600;    // let the pop/physics settle before the veil
   const OVERLAY_FADE_MS = 450;
 
   // --- state -----------------------------------------------------------------
   let state = 'playing';        // 'playing' | 'win' | 'lose'
-  let remaining = TOTAL_BIRDS;  // birds not yet launched
+  let totalBirds = DEFAULT_BIRDS; // budget for the current level
+  let remaining = DEFAULT_BIRDS;  // birds not yet launched
   let inFlight = false;         // a launched bird is still resolving
   let starsAtWin = 0;
 
@@ -40,13 +41,44 @@
   }
 
   function attemptNumber() {
-    const n = TOTAL_BIRDS - remaining + (inFlight ? 0 : 1);
-    return Math.max(1, Math.min(TOTAL_BIRDS, n));
+    const n = totalBirds - remaining + (inFlight ? 0 : 1);
+    return Math.max(1, Math.min(totalBirds, n));
   }
 
+  // Bird budget comes from the level definition; fall back for stubbed modules.
+  function birdsForLevel() {
+    try {
+      const lv = Structure.level && Structure.level();
+      if (lv && typeof lv.birds === 'number') return lv.birds;
+    } catch (e) { /* tolerate stubs */ }
+    return DEFAULT_BIRDS;
+  }
+
+  function levelInfo() {
+    try {
+      if (Structure.level) {
+        return {
+          index: Structure.levelIndex(),
+          count: Structure.levelCount(),
+          name: Structure.level().name,
+          difficulty: Structure.level().difficulty,
+          left: Structure.enemiesLeft ? Structure.enemiesLeft() : 0,
+        };
+      }
+    } catch (e) { /* tolerate stubs */ }
+    return null;
+  }
+
+  function isLastLevel() {
+    const info = levelInfo();
+    return !!info && info.index >= info.count - 1;
+  }
+
+  // Rebuild the current level from scratch.
   function restart() {
+    totalBirds = birdsForLevel();
     state = 'playing';
-    remaining = TOTAL_BIRDS;
+    remaining = totalBirds;
     inFlight = false;
     starsAtWin = 0;
     reloadTimerMs = -1;
@@ -57,6 +89,20 @@
     clearShake();
     Game.events.emit('level:reset', {});
     // Contract: slingshot nocks a fresh bird on level:reset — nothing else to do.
+  }
+
+  // Switch to another level, then start it fresh.
+  function goToLevel(i) {
+    try {
+      if (Structure.loadLevel) Structure.loadLevel(i);
+    } catch (e) { /* tolerate stubs */ }
+    totalBirds = birdsForLevel();
+    restart();
+  }
+
+  function nextLevel() {
+    const info = levelInfo();
+    goToLevel(info ? info.index + 1 : 0);
   }
 
   function clearShake() {
@@ -106,7 +152,8 @@
       }
     });
 
-    Game.events.on('enemy:killed', function () {
+    // A level is only won once every enemy is down.
+    Game.events.on('level:cleared', function () {
       toWin();
     });
 
@@ -119,11 +166,24 @@
 
   function wireInput() {
     window.addEventListener('keydown', function (e) {
-      if (e.key === 'r' || e.key === 'R') restart();
+      if (e.key === 'r' || e.key === 'R') { restart(); return; }
+      // N advances after a win; on the last level it loops back to level 1.
+      if (e.key === 'n' || e.key === 'N') {
+        if (state === 'win') { isLastLevel() ? goToLevel(0) : nextLevel(); }
+        return;
+      }
+      // Number keys jump straight to a level, for practice.
+      if (e.key >= '1' && e.key <= '9') {
+        const i = parseInt(e.key, 10) - 1;
+        const info = levelInfo();
+        if (info && i < info.count) goToLevel(i);
+      }
     });
-    // Click restarts only while an overlay is showing (drags must keep working).
+    // Click advances/restarts only while an overlay is showing (drags keep working).
     Game.canvas.addEventListener('pointerdown', function () {
-      if (state !== 'playing' && overlayVisible) restart();
+      if (state === 'playing' || !overlayVisible) return;
+      if (state === 'win') { isLastLevel() ? goToLevel(0) : nextLevel(); }
+      else restart();
     });
   }
 
@@ -229,7 +289,8 @@
   }
 
   function drawHUD(ctx) {
-    const x = 16, y = 16, w = 200, h = 68, pad = 14;
+    const info = levelInfo();
+    const x = 16, y = 16, w = 232, h = info ? 94 : 68, pad = 14;
     ctx.save();
     // panel
     roundRect(ctx, x, y, w, h, 12);
@@ -238,17 +299,35 @@
     ctx.lineWidth = 1;
     ctx.strokeStyle = 'rgba(255,255,255,0.25)';
     ctx.stroke();
+    // level name + difficulty
+    let rowY = y + pad;
+    if (info) {
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '700 15px system-ui, sans-serif';
+      ctx.fillText('Fase ' + (info.index + 1) + '/' + info.count + ' — ' + info.name, x + pad, rowY);
+      ctx.fillStyle = info.difficulty === 'Difícil' ? '#ff9b7a'
+        : info.difficulty === 'Médio' ? '#ffd479' : '#9ee37d';
+      ctx.font = '600 12px system-ui, sans-serif';
+      ctx.fillText(info.difficulty.toUpperCase(), x + pad, rowY + 19);
+      // enemies left, right-aligned on the same row
+      ctx.textAlign = 'right';
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.fillText(info.left + (info.left === 1 ? ' alvo' : ' alvos'), x + w - pad, rowY + 19);
+      rowY += 40;
+    }
     // bird icons (remaining = still filled, spent = ghosted)
     const iconR = 11;
-    for (let i = 0; i < TOTAL_BIRDS; i++) {
-      drawBirdIcon(ctx, x + pad + iconR + i * (iconR * 2 + 8), y + pad + iconR - 2, iconR, i < remaining);
+    for (let i = 0; i < totalBirds; i++) {
+      drawBirdIcon(ctx, x + pad + iconR + i * (iconR * 2 + 8), rowY + iconR - 2, iconR, i < remaining);
     }
     // attempts counter
     ctx.fillStyle = '#ffffff';
     ctx.font = '600 15px system-ui, sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
-    ctx.fillText('Tentativa ' + attemptNumber() + '/' + TOTAL_BIRDS, x + pad, y + h - 12);
+    ctx.fillText('Tentativa ' + attemptNumber() + '/' + totalBirds, x + pad, y + h - 12);
     ctx.restore();
   }
 
@@ -282,7 +361,7 @@
       }
       ctx.fillStyle = '#ffffff';
       ctx.font = '700 64px system-ui, sans-serif';
-      ctx.fillText('Nível limpo! 🎉', cx, cy - 10);
+      ctx.fillText(isLastLevel() ? 'Você zerou o jogo! 🏆' : 'Fase concluída! 🎉', cx, cy - 10);
     } else {
       ctx.fillStyle = '#ffffff';
       ctx.font = '700 58px system-ui, sans-serif';
@@ -291,7 +370,15 @@
 
     ctx.fillStyle = 'rgba(255,255,255,0.85)';
     ctx.font = '400 24px system-ui, sans-serif';
-    ctx.fillText('Pressione R ou clique para jogar de novo', cx, cy + 48);
+    const hint = state === 'win'
+      ? (isLastLevel()
+          ? 'N ou clique para voltar à fase 1 · R repete esta fase'
+          : 'N ou clique para a próxima fase · R repete esta fase')
+      : 'Pressione R ou clique para tentar de novo';
+    ctx.fillText(hint, cx, cy + 48);
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.font = '400 17px system-ui, sans-serif';
+    ctx.fillText('Teclas 1–5 escolhem a fase', cx, cy + 84);
 
     ctx.restore();
   }
@@ -306,10 +393,15 @@
     init: function () {
       wireEvents();
       wireInput();
+      totalBirds = birdsForLevel();
+      remaining = totalBirds;
       Game.updaters.push(update);
       Game.renderers.push(render); // init() runs last in main.js → HUD on top
     },
     getState: function () { return state; },
     getRemaining: function () { return remaining; },
+    getTotalBirds: function () { return totalBirds; },
+    goToLevel: goToLevel,
+    nextLevel: nextLevel,
   };
 })();

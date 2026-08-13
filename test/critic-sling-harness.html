@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<!-- Critic-only harness: world + slingshot in isolation, so the sling can be
+     evaluated while other modules are mid-edit. Does not touch index.html. -->
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Slingshot critic harness</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #0e1420; }
+  #game { display: block; margin: 0 auto; touch-action: none; cursor: default; }
+</style>
+</head>
+<body>
+<canvas id="game" width="1280" height="720"></canvas>
+<script src="../vendor/matter.min.js"></script>
+<script src="../js/world.js"></script>
+<script src="../js/slingshot.js"></script>
+<script>
+  Slingshot.init();
+  // reference marks for the structure footprint (x 880..1080), critic-only
+  Game.renderers.push(function (ctx) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(120,60,60,0.5)';
+    ctx.setLineDash([6, 6]);
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(880, 380); ctx.lineTo(880, 640);
+    ctx.moveTo(1080, 380); ctx.lineTo(1080, 640); ctx.stroke();
+    ctx.restore();
+  });
+</script>
+</body>
+</html>
