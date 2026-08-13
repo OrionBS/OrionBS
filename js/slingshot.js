@@ -123,8 +123,10 @@
   function killBird() {
     const bird = state.bird;
     if (!bird) return;
-    Game.events.emit('bird:dead', { bird: bird });
+    // Clear our state BEFORE emitting so a listener that synchronously calls
+    // Slingshot.loadBird() is not clobbered afterwards.
     removeBird(); // also clears the trail; GameLoop decides what happens next
+    Game.events.emit('bird:dead', { bird: bird });
   }
 
   // --- Pointer input --------------------------------------------------------
