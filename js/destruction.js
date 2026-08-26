@@ -12,6 +12,7 @@
   var Body = Matter.Body;
   var Composite = Matter.Composite;
   var Events = Matter.Events;
+  var Sleeping = Matter.Sleeping;
 
   // ---------------------------------------------------------------- tuning
   var MATERIALS = {
@@ -50,6 +51,7 @@
   var BLINK_PERIOD_MS = 3000;
   var BLINK_LEN_MS = 140;
   var MAX_PARTICLES = 400;
+  var WAKE_RADIUS = 260;   // how far a collapse rouses sleeping neighbours
 
   // ------------------------------------------------- deterministic layout
   // Ground top is Game.GROUND_Y (640). Every block spawns exactly touching
@@ -60,6 +62,24 @@
   var levelIndex = 0;
 
   function currentLevel() { return window.LEVELS[levelIndex]; }
+
+  function liveEnemies() {
+    return enemies.filter(function (e) { return !e.removed; });
+  }
+
+  // Removing a body fires no collision, so Matter never wakes whatever was
+  // resting on it — the load just hangs in the sky. Wake the neighbourhood
+  // whenever the world changes under a sleeping stack.
+  function wakeNear(x, y, radius) {
+    var all = Composite.allBodies(Game.world);
+    var r2 = radius * radius;
+    for (var i = 0; i < all.length; i++) {
+      var b = all[i];
+      if (b.isStatic) continue;
+      var dx = b.position.x - x, dy = b.position.y - y;
+      if (dx * dx + dy * dy <= r2) Sleeping.set(b, false);
+    }
+  }
 
   // ------------------------------------------------------------- state
   var blocks = [];       // {body, mat, def, hp, maxHp, cracksA, cracksB, dead}
@@ -168,15 +188,11 @@
 
   function teardown() {
     var i;
-    for (i = 0; i < blocks.length; i++) {
-      if (!blocks[i].dead) Composite.remove(Game.world, blocks[i].body);
-    }
-    for (i = 0; i < debrisList.length; i++) {
-      if (!debrisList[i].dead) Composite.remove(Game.world, debrisList[i].body);
-    }
-    for (i = 0; i < enemies.length; i++) {
-      if (!enemies[i].dead) Composite.remove(Game.world, enemies[i].body);
-    }
+    // Unconditional: Composite.remove on an absent body is a no-op, and a
+    // record queued for death but not yet drained must not leak a collider.
+    for (i = 0; i < blocks.length; i++) Composite.remove(Game.world, blocks[i].body);
+    for (i = 0; i < debrisList.length; i++) Composite.remove(Game.world, debrisList[i].body);
+    for (i = 0; i < enemies.length; i++) Composite.remove(Game.world, enemies[i].body);
     enemies.length = 0;
     blocks.length = 0;
     debrisList.length = 0;
@@ -211,6 +227,11 @@
       x: (pair.bodyA.position.x + pair.bodyB.position.x) / 2,
       y: (pair.bodyA.position.y + pair.bodyB.position.y) / 2,
     };
+  }
+
+  function isDamageable(body) {
+    var e = registry[body.id];
+    return !!e && (e.kind === 'block' || e.kind === 'enemy');
   }
 
   function applyDamage(body, energy) {
@@ -251,8 +272,14 @@
         var n = Math.min(9, 2 + Math.floor(energy / 80));
         spawnDust(pt.x, pt.y, n, ['#d8d2c0', '#c9c2a6', '#b8b2a0'], 1.6, 0.06);
       }
-      if (energy >= IMPACT_EVENT_MIN) {
+      // Only real hits on breakable things shake the screen. Otherwise the
+      // bird landing on the grass (static ground => full reduced mass) is the
+      // loudest event in the game and every shot maxes the shake.
+      var damageable = isDamageable(pair.bodyA) || isDamageable(pair.bodyB);
+      if (damageable && energy >= IMPACT_EVENT_MIN) {
         Game.events.emit('impact', { x: pt.x, y: pt.y, energy: energy });
+        // a solid hit also rouses the stack around it
+        wakeNear(pt.x, pt.y, WAKE_RADIUS);
       }
       applyDamage(pair.bodyA, energy);
       applyDamage(pair.bodyB, energy);
@@ -325,9 +352,12 @@
   }
 
   function killEnemy(rec) {
-    if (rec.dead) return;
+    // `dead` is set when the kill is QUEUED, so dedupe on `removed` instead —
+    // guarding on `dead` here would swallow every kill.
+    if (rec.removed) return;
     var pos = { x: rec.body.position.x, y: rec.body.position.y };
     rec.dead = true;
+    rec.removed = true;
     Composite.remove(Game.world, rec.body);
     delete registry[rec.body.id];
     enemiesLeft--;
@@ -353,6 +383,9 @@
     // process queued deaths (never mutate the world inside collision events)
     while (pendingKills.length) {
       var entry = pendingKills.shift();
+      // Wake anything the dying body might have been holding up.
+      var dp = entry.rec.body.position;
+      wakeNear(dp.x, dp.y, WAKE_RADIUS);
       if (entry.kind === 'block') fragmentBlock(entry.rec);
       else if (entry.kind === 'enemy') killEnemy(entry.rec);
       else if (entry.kind === 'debris') breakDebris(entry.rec);
@@ -545,7 +578,7 @@
     }
 
     for (i = 0; i < enemies.length; i++) {
-      if (!enemies[i].dead) drawEnemy(ctx, enemies[i]);
+      if (!enemies[i].removed) drawEnemy(ctx, enemies[i]);
     }
 
     // dust / burst particles
@@ -619,10 +652,14 @@
     level: function () { return currentLevel(); },
     levelCount: function () { return window.LEVELS.length; },
     // debug/test introspection (not part of the gameplay contract)
+    // Route a body through the real lethal-damage path, so tests exercise the
+    // same code a hit does (queued kill, wake, fragmentation) — not raw removal.
+    _debugKill: function (body) { applyDamage(body, 1e6); },
     _debug: function () {
       return {
         blocks: blocks.map(function (r) {
           return {
+            id: r.body.id,
             mat: r.mat,
             x: r.body.position.x, y: r.body.position.y,
             hp: r.hp, maxHp: r.maxHp,
@@ -631,16 +668,15 @@
         debris: debrisList.length,
         particles: particles.length,
         level: levelIndex,
-        enemies: enemies.filter(function (e) { return !e.dead; }).map(function (e) {
+        enemies: liveEnemies().map(function (e) {
           return { x: e.body.position.x, y: e.body.position.y, hp: e.hp };
         }),
-        // back-compat: first living enemy
-        enemy: enemiesLeft > 0
-          ? (function () {
-              var e = enemies.filter(function (r) { return !r.dead; })[0];
-              return { x: e.body.position.x, y: e.body.position.y, hp: e.hp };
-            })()
-          : null,
+        enemiesLeft: enemiesLeft,
+        // back-compat: first living enemy, or null
+        enemy: (function () {
+          var e = liveEnemies()[0];
+          return e ? { x: e.body.position.x, y: e.body.position.y, hp: e.hp } : null;
+        })(),
       };
     },
   };

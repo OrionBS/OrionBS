@@ -15,9 +15,15 @@
   const MAX_PULL = 110;               // px, clamp radius around anchor
   const GRAB_R = 70;                  // generous grab radius around the bird
   const MIN_PULL = 10;                // below this a release is a dud (re-nock)
-  const K = 0.14;                     // launch speed (px/step) per px of pull
-  const V_MAX = 16;                   // speed cap in px/step (~960 px/s)
+  const K = 0.20;                     // launch speed (px/step) per px of pull
+  // Safety cap only: K * MAX_PULL = 22, so the cap sits ~5% above the fastest
+  // shot the clamp allows and never clips normal play.
+  const V_MAX = 23;                   // speed cap in px/step (1380 px/s)
   const FOLLOW = 0.6;                 // elastic lerp toward pointer, per 60Hz frame
+  const HOT_PULL = MAX_PULL * 0.98;   // at/above this the sling reads as maxed out
+  const PREVIEW_STEPS = 150;          // preview horizon (2.5 s) — steep lobs fit
+  const PREVIEW_CLEAR = 40;           // px around the anchor kept free of dots
+  const SETTLE_MS = 120;              // dud release eases home over this long
   const STEP_DT = 1000 / 60;          // engine fixed step (ms)
   const FLY_TIMEOUT = 8000;           // ms until forced bird:dead
   const SLOW_SPEED = 0.2;             // px/step considered "stopped"

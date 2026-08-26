@@ -6,6 +6,9 @@
   'use strict';
 
   const DEFAULT_BIRDS = 3;
+  const QUIET_SPEED = 0.4;       // below this, a body counts as settled
+  const QUIET_HOLD_MS = 400;     // world must stay quiet this long
+  const LOSE_WAIT_CAP_MS = 3000; // never stall the verdict longer than this
   const RELOAD_BEAT_MS = 700;   // pause after a dead bird before nocking the next
   const WIN_REVEAL_MS = 600;    // let the pop/physics settle before the veil
   const OVERLAY_FADE_MS = 450;
@@ -19,6 +22,8 @@
 
   // updater-driven timers (ms remaining; <0 = inactive)
   let reloadTimerMs = -1;
+  let loseWatchMs = -1;   // >=0 while waiting for the world to settle before losing
+  let quietMs = 0;
   let overlayDelayMs = -1;      // countdown before the overlay starts fading in
   let overlayAlpha = 0;         // 0..1 fade progress
   let overlayVisible = false;
@@ -82,6 +87,8 @@
     inFlight = false;
     starsAtWin = 0;
     reloadTimerMs = -1;
+    loseWatchMs = -1;
+    quietMs = 0;
     overlayDelayMs = -1;
     overlayAlpha = 0;
     overlayVisible = false;
@@ -105,6 +112,19 @@
     goToLevel(info ? info.index + 1 : 0);
   }
 
+  // Fastest-moving non-static body, used to tell when the level has settled.
+  function worldMaxSpeed() {
+    try {
+      const all = Matter.Composite.allBodies(Game.world);
+      let m = 0;
+      for (let i = 0; i < all.length; i++) {
+        if (all[i].isStatic) continue;
+        if (all[i].speed > m) m = all[i].speed;
+      }
+      return m;
+    } catch (e) { return 0; }
+  }
+
   function clearShake() {
     if (shakeApplied) {
       Game.canvas.style.transform = '';
@@ -113,7 +133,11 @@
   }
 
   function toWin() {
-    if (state !== 'playing') return; // guard double transitions
+    if (state === 'win') return;    // guard double transitions
+    // A late crush can clear the level after a loss was declared — the win wins.
+    loseWatchMs = -1;
+    overlayVisible = false;
+    overlayAlpha = 0;
     state = 'win';
     starsAtWin = Math.max(1, Math.min(3, remaining + 1));
     reloadTimerMs = -1;             // cancel any pending reload beat
@@ -142,13 +166,15 @@
     });
 
     Game.events.on('bird:dead', function () {
-      if (state !== 'playing') return; // e.g. arrives after enemy:killed
+      if (state !== 'playing') return; // e.g. arrives after level:cleared
       inFlight = false;
-      if (!enemyAlive()) return;       // enemy:killed handles the transition
+      if (!enemyAlive()) return;       // level:cleared handles the transition
       if (remaining > 0) {
         reloadTimerMs = RELOAD_BEAT_MS; // small beat, then nock the next bird
       } else {
-        toLose();
+        // Out of birds, but a tower may still be toppling onto the last
+        // target. Wait for the world to go quiet before calling it a loss.
+        loseWatchMs = 0;
       }
     });
 
@@ -197,6 +223,19 @@
         if (state === 'playing' && enemyAlive() && remaining > 0) {
           try { Slingshot.loadBird(); } catch (e) { /* tolerate stubs */ }
         }
+      }
+    }
+
+    // Out of birds: hold the verdict until the collapse finishes, so a late
+    // crush can still turn the run into a win.
+    if (loseWatchMs >= 0) {
+      loseWatchMs += dt;
+      const moving = worldMaxSpeed();
+      quietMs = moving < QUIET_SPEED ? quietMs + dt : 0;
+      if (quietMs >= QUIET_HOLD_MS || loseWatchMs >= LOSE_WAIT_CAP_MS) {
+        loseWatchMs = -1;
+        quietMs = 0;
+        if (state === 'playing' && enemyAlive()) toLose();
       }
     }
 
@@ -290,7 +329,7 @@
 
   function drawHUD(ctx) {
     const info = levelInfo();
-    const x = 16, y = 16, w = 232, h = info ? 94 : 68, pad = 14;
+    const x = 16, y = 16, w = 232, h = info ? 122 : 68, pad = 14;
     ctx.save();
     // panel
     roundRect(ctx, x, y, w, h, 12);
